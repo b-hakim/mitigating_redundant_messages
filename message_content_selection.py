@@ -5,8 +5,8 @@ import time
 from ast import literal_eval
 
 import numpy as np
-from paper3_scripts.GameTheory import GameTheory
-from paper3_scripts.results import Stats
+from GameTheory import GameTheory
+from results import Stats
 
 """
 todo: Do not send messages about objects that are being sent by another vehicle

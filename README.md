@@ -1,4 +1,4 @@
-# Cooperative Perception - Mitigating Redundant Messages
+# Cooperative Perception: Mitigating Redundant Messages
 
 ## Steps
 

@@ -1,7 +1,6 @@
 import numpy as np
 from scipy.optimize import fsolve
-
-from paper3_scripts import solver
+import solver
 
 
 class GameTheory:
