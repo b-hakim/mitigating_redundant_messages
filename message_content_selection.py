@@ -3,6 +3,7 @@ import os
 import pickle
 import time
 from ast import literal_eval
+from random import random
 
 import numpy as np
 from GameTheory import GameTheory
@@ -45,6 +46,8 @@ class MessageContentSelection():
             self.cv2x_vehicles, self.non_cv2x_vehicles, self.buildings, \
             self.av_perceiving_nav, self.scores_per_cv2x, los_statuses = pickle.load(fw)
 
+        # self.scores_per_cv2x ==> (receiver_av_id, v, perceived_nav, p))
+
         self.map_scores_distributions = np.load(os.path.join(basedir,"../map_scores_distribution.npy"))
         self.stats = Stats()
 
@@ -62,7 +65,7 @@ class MessageContentSelection():
     def adjust_scores(scores):
         for i in range(len(scores)):
             scores[i] = list(scores[i])
-            if scores[i][1] > 1:
+            if scores[i][1] > 1 or (scores[i][3] == 0.5 and scores[i][1]*2 > 1):
                 scores[i][1] = 0
 
         return scores
@@ -75,7 +78,10 @@ class MessageContentSelection():
 
         for sender_av, scores in self.scores_per_cv2x.items():
             scores = MessageContentSelection.adjust_scores(scores)
-            scores = sorted(scores, key=lambda x: x[1], reverse=True)
+            self.scores_per_cv2x[sender_av] = sorted(scores, key=lambda x: x[1], reverse=True)
+
+        for sender_av, scores in self.scores_per_cv2x.items():
+            scores = MessageContentSelection.adjust_scores(scores)
             self.scores_per_cv2x[sender_av] = scores
 
             score = scores[0]  # max
@@ -94,6 +100,63 @@ class MessageContentSelection():
                     potential_senders.append(sender2_av)
 
             all_potential_senders[sender_av] = potential_senders
+
+        ######################################## Baseline_3 Random   ###############################################
+        random_decision_object_to_send = {}
+
+        for sender_av, potential_senders in all_potential_senders.items():
+            a = random()
+
+            is_least_dist = a > 0.5
+
+            if is_least_dist:
+                ret = [self.scores_per_cv2x[sender_av][0].copy(), self.scores_per_cv2x[sender_av][0].copy()]
+            else:
+                ret = [self.scores_per_cv2x[sender_av][1].copy(), self.scores_per_cv2x[sender_av][0].copy()]
+
+            ret[0][2] = ret[0][2].vehicle_id
+            ret[1][2] = ret[1][2].vehicle_id
+
+            random_decision_object_to_send[sender_av] = tuple(ret)
+
+        ######################################## Baseline_2 Distance ###############################################
+        distance_decision_object_to_send = {}
+
+        for sender_av, potential_senders in all_potential_senders.items():
+            sender_pos = np.array(self.cv2x_vehicles[sender_av]._pos)
+            receiver_pos = np.array(self.scores_per_cv2x[sender_av][0][2]._pos)
+            dist1 = np.linalg.norm(sender_pos - receiver_pos)
+            is_least_dist = True
+
+            # vmax_mean, vmax_std = self.map_scores_distributions[0]
+
+            for other_sender in potential_senders:
+                # v1_dash = np.random.normal(loc=vmax_mean, scale=vmax_std)
+
+                # if v1_dash > self.scores_per_cv2x[sender_av][0][1] + 0.001:
+                    # if the other sender has v1 higher than current v1 then ignore him he will send to someone else
+                    # continue
+
+                other_sender_pos = np.array(self.cv2x_vehicles[other_sender]._pos)
+                # assert self.scores_per_cv2x[sender_av][0][2].vehicle_id == self.scores_per_cv2x[other_sender][0][2].vehicle_id
+                dist2 = np.linalg.norm(other_sender_pos - receiver_pos)
+                # self.scores_per_cv2x ==> (receiver_av_id, v, perceived_nav, p))
+
+                if dist2 < dist1:
+                    is_least_dist = False
+                    break
+
+            if is_least_dist:
+                ret = [self.scores_per_cv2x[sender_av][0].copy(), self.scores_per_cv2x[sender_av][0].copy()]
+            else:
+                ret = [self.scores_per_cv2x[sender_av][1].copy(), self.scores_per_cv2x[sender_av][0].copy()]
+
+            ret[0][2] = ret[0][2].vehicle_id
+            ret[1][2] = ret[1][2].vehicle_id
+
+            distance_decision_object_to_send[sender_av] = tuple(ret)
+
+        ######################################## Game Theory - Mixed Problem #######################################
 
         ## 2- Get decision for each sender
         # 2.1 Fill the payoff matrix based on the number of players
@@ -124,6 +187,10 @@ class MessageContentSelection():
                 self.players_scores[0][1][1] -= self.players_scores[0][1][1] * 0.001
                 self.players_scores[0][1] = tuple(self.players_scores[0][1])
 
+            dist = self.get_dist_sender_perceived_nav(sender_av, sender_av)
+            self.inverse_distances = [dist]
+            # self.inverse_distances = [1]
+
             for i in range(n):
                 v1_dash = np.random.normal(loc=vmax_mean, scale=vmax_std)
 
@@ -137,9 +204,13 @@ class MessageContentSelection():
                     # v2_dash = self.scores_per_cv2x[sender_av][1][1]
 
                     if False: # occlusion
-                        self.players_scores.append([self.scores_per_cv2x[sender_av][0], v2_dash])*0.5 # incorrect: need to multiply the score itself
+                        self.players_scores.append([self.scores_per_cv2x[sender_av][0], v2_dash]) * 0.5 # incorrect: need to multiply the score itself
                     else:
                         self.players_scores.append([self.scores_per_cv2x[sender_av][0], (None, v2_dash, None)])
+
+                    dist = self.get_dist_sender_perceived_nav(potential_senders[i], sender_av)
+                    self.inverse_distances.append(dist)
+                    # self.inverse_distances.append(1)
 
             if n == 0:
                 # all other potential players will probably send smthg else, solution is to just send this object to bs.
@@ -150,6 +221,7 @@ class MessageContentSelection():
                 shape = n * [2] + [n]
                 self.payoff = np.zeros(shape)
                 # s = time.time()
+
                 self.fill_payoff_matrix([])
                 g = GameTheory(self.payoff)
                 d = g.dominant_solutions()
@@ -202,15 +274,19 @@ class MessageContentSelection():
                         p2 = np.array(self.scores_per_cv2x[sender_av][0][2]._pos)
                         # dist = np.sqrt(np.dot((p1-p2), (p1-p2)))
                         dist = np.linalg.norm(p1-p2)
-                        decision_object_to_send[sender_av] = self.player_sends_obj(sender_av, 0 if r < ms[0] * 1-dist/75 else 1)
+                        # decision_object_to_send[sender_av] = self.player_sends_obj(sender_av, 0 if r < ms[0] * 1-dist/75 else 1)
+                        decision_object_to_send[sender_av] = self.player_sends_obj(sender_av, 0 if r < ms[0] else 1)
 
         # for sender, decision in decision_object_to_send.items():
         #     print(f"Sender ID: {sender}, Receiver1 ID: {decision[0][0]}, Object ID: {decision[0][2]}, Score: {np.round(decision[0][1], 2)},"
         #           f" ::Original:: Receiver1 ID: {decision[1][0]}, Object ID: {decision[1][2]}, Score: {np.round(decision[1][1], 2)}")
 
         # self.stats.approaches_counts = [dominant_approach, ms_approach]
+        ##############################################################################################
 
-        self.evaluate_decision(decision_object_to_send, used_gt_approach)
+        self.evaluate_decision(used_gt_approach, {"gt":decision_object_to_send,
+                                                  "distance" : distance_decision_object_to_send,
+                                                  "random" : random_decision_object_to_send})
 
         stats_path = os.path.join(self.basedir, "stats.pkl")
 
@@ -219,52 +295,58 @@ class MessageContentSelection():
 
         # self.stats.print()
 
-    def evaluate_decision(self, decision_object_to_send, used_gt_approach):
-        gt_receiver_obj_dict = {}
-        self.stats.approaches_counts = [used_gt_approach["dominant"],
+    def evaluate_decision(self, used_gt_approach, approaches_decisions_dic):
+        receiver_obj_dict = {"gt":{}, "distance":{}, "random":{}}
+
+        self.stats.approaches_metrics["gt"].approaches_counts = [used_gt_approach["dominant"],
                                         used_gt_approach["dominant - other"],
                                         used_gt_approach["ms"]]
 
-        for sender, decision in decision_object_to_send.items():
-            if decision[0][1] == 0:
-            # if decision[0][1] == 0 or used_gt_approach[sender] == "no":
-                continue
+        for approach in approaches_decisions_dic:
+            for sender, score in approaches_decisions_dic[approach].items():
+                if score[0][1] == 0:
+                # if decision[0][1] == 0 or used_gt_approach[sender] == "no":
+                    continue
 
-            id = decision[0][0]+"_"+decision[0][2]
+                id = score[0][0]+"_"+score[0][2]
 
-            if id in gt_receiver_obj_dict:
-                self.stats.gt_number_duplicate += 1
-                self.stats.gt_total_duplicate_value += decision[0][1]
-                gt_receiver_obj_dict[id] += 1
-            else:
-                gt_receiver_obj_dict[id] = 1
-                self.stats.gt_total_sent_value += decision[0][1]
+                if id in receiver_obj_dict[approach]:
+                    self.stats.approaches_metrics[approach].number_duplicate += 1
+                    self.stats.approaches_metrics[approach].total_duplicate_value += score[0][1]
+                    receiver_obj_dict[approach][id] += 1
+                else:
+                    receiver_obj_dict[approach][id] = 1
+                    self.stats.approaches_metrics[approach].total_sent_value += score[0][1]
 
-        self.stats.gt_number_sent_unique = len(gt_receiver_obj_dict.keys())
+            self.stats.approaches_metrics[approach].number_sent_unique = len(receiver_obj_dict[approach].keys())
 
+        ##
         max_receiver_obj_dict = {}
-        gt_objs_sent = list(gt_receiver_obj_dict.keys())
+        objs_sent = {"gt":list(receiver_obj_dict["gt"].keys()),
+                     "distance": list(receiver_obj_dict["distance"].keys()),
+                     "random": list(receiver_obj_dict["random"].keys())}
 
-        for sender, decision in self.scores_per_cv2x.items():
-            if decision[0][1] == 0:
+        for sender, score in self.scores_per_cv2x.items():
+            if score[0][1] == 0: #score
             # if decision[0][1] == 0 or used_gt_approach[sender] == "no":
                 continue
 
-            id = decision[0][0] + "_" + decision[0][2].vehicle_id
+            id = score[0][0] + "_" + score[0][2].vehicle_id
 
-            if id not in gt_objs_sent:
-                self.stats.gt_num_not_sent_msgs += 1
-                self.stats.gt_total_not_sent_value += decision[0][1]
+            for approach in objs_sent:
+                if id not in objs_sent[approach]:
+                    self.stats.approaches_metrics[approach].num_not_sent_msgs += 1
+                    self.stats.approaches_metrics[approach].total_not_sent_value += score[0][1]
 
             if id in max_receiver_obj_dict:
-                self.stats.max_number_duplicate += 1
-                self.stats.max_total_duplicate_value += decision[0][1]
+                self.stats.approaches_metrics["max"].number_duplicate += 1
+                self.stats.approaches_metrics["max"].total_duplicate_value += score[0][1]
                 max_receiver_obj_dict[id] += 1
             else:
                 max_receiver_obj_dict[id] = 1
-                self.stats.max_total_sent_value += decision[0][1]
+                self.stats.approaches_metrics["max"].total_sent_value += score[0][1]
 
-        self.stats.max_number_sent_unique = len(max_receiver_obj_dict.keys())
+        self.stats.approaches_metrics["max"].number_sent_unique = len(max_receiver_obj_dict.keys())
 
         # How many used NE, dominant, or Mixed
         # self.stats.print()
@@ -272,13 +354,15 @@ class MessageContentSelection():
     def test_payoff(self):
         #region Game 1
 
-        self.players_scores = [[[None, 10, None], [None, 8, None]],
-                               [[None, 10, None], [None, 7, None]]]
-        self.payoff = np.zeros((2, 2, 2))
-        self.fill_payoff_matrix([])
-
-        g = GameTheory(self.payoff)
-        print(g.payoff)
+        # self.players_scores = [[[None, 10, None], [None, 8, None]],
+        #                        [[None, 10, None], [None, 7, None]]]
+        # self.payoff = np.zeros((2, 2, 2))
+        # self.fill_payoff_matrix([])
+        #
+        # print(self.payoff)
+        #
+        # g = GameTheory(self.payoff)
+        # print(g.payoff)
         # print("Dominant Solution:")
         #
         # d = g.dominant_solutions()
@@ -288,9 +372,9 @@ class MessageContentSelection():
         # ne = g.nash_equilibrium_solutions()
         # print(ne)
         #
-        print("MS Solution:")
-        ms = g.mixed_strategy_solution()
-        print(ms)
+        # print("MS Solution:")
+        # ms = g.mixed_strategy_solution()
+        # print(ms)
         #endregion
 
         #region Game 2
@@ -301,17 +385,24 @@ class MessageContentSelection():
         print(g.payoff)
         # print("Dominant Solution:")
         #
-        # d = g.dominant_solutions()
-        # print(d)
+        # # d = g.dominant_solutions()
+        # # print(d)
+        # #
+        # # print("NE Solution:")
+        # # ne = g.nash_equilibrium_solutions()
+        # # print(ne)
         #
-        # print("NE Solution:")
-        # ne = g.nash_equilibrium_solutions()
-        # print(ne)
+        # print("MS Solution:")
+        # ms = g.mixed_strategy_solution()
+        # print(ms)
+        #endrgion
+        self.payoff = np.array([[[3, 4],[4, 3]],
+                                [[5, 5],[2, 7]]])
 
+        g = GameTheory(self.payoff)
         print("MS Solution:")
         ms = g.mixed_strategy_solution()
         print(ms)
-        #endrgion
 
     def fill_payoff_matrix(self, actions):
         num_players = self.payoff.shape[-1]
@@ -329,7 +420,8 @@ class MessageContentSelection():
             # if no player sends --> use s2 for all players and - s/n
             if num_senders == 0:
                 for player_idx, action in enumerate(actions):
-                    scores.append(self.players_scores[player_idx][1][1] - self.players_scores[player_idx][0][1]/num_players)
+                    scores.append(self.inverse_distances[player_idx] *
+                            (self.players_scores[player_idx][1][1] - self.players_scores[player_idx][0][1]/num_players))
 
             # if all players send --> divide the score among them
             elif num_senders == num_players:
@@ -341,20 +433,22 @@ class MessageContentSelection():
                     # else:
                     #     scores.append(0)
                     #
-                    scores.append(self.players_scores[player_idx][action][1]/num_players)
+                    scores.append(self.inverse_distances[player_idx] *
+                                  (self.players_scores[player_idx][action][1]/num_players))
 
             # if one player sends all do not send, take s for that player but s2 for others
             elif num_senders == 1:
                 for player_idx, action in enumerate(actions):
-                    scores.append(self.players_scores[player_idx][action][1])
+                    scores.append(self.inverse_distances[player_idx]*(self.players_scores[player_idx][action][1]))
 
             # if more than one player sends (but not all) then those who send are punished
             elif num_senders > 1:
                 for player_idx, action in enumerate(actions):
                     if action == 0:
-                        scores.append(self.players_scores[player_idx][action][1]/num_senders)
+                        scores.append(self.inverse_distances[player_idx]*
+                                      (self.players_scores[player_idx][action][1]/num_senders))
                     else:
-                        scores.append(self.players_scores[player_idx][action][1])
+                        scores.append(self.inverse_distances[player_idx]*(self.players_scores[player_idx][action][1]))
 
             obj = self.payoff
 
@@ -368,6 +462,15 @@ class MessageContentSelection():
         # for player in range(len(actions), num_players):
         for action in range(2):
             self.fill_payoff_matrix(actions+[action])
+
+    def get_dist_sender_perceived_nav(self, sender_av, perceived_vehicle_sender):
+        p1 = np.array(self.cv2x_vehicles[sender_av]._pos)
+        p2 = np.array(self.scores_per_cv2x[perceived_vehicle_sender][0][2]._pos)
+        # dist = np.sqrt(np.dot((p1-p2), (p1-p2)))
+        dist = np.linalg.norm(p1 - p2)
+        return 0.1/dist
+        # return 0.005/dist
+        # return (1-(dist/75))*0.0005
 
 
 class MCSThread(multiprocessing.Process):
@@ -410,7 +513,6 @@ def run_simulation(path):
     block_size = len(paths)//p
     thread_pool = []
 
-
     for i in range(p):
         start = block_size*i
         end = start + block_size
@@ -420,6 +522,7 @@ def run_simulation(path):
 
         mcs = MCSThread(paths[start:end], i)
         mcs.start()
+        print(f"Process {i} started...")
         thread_pool.append(mcs)
 
     for p in thread_pool:
@@ -430,7 +533,6 @@ def run_simulation(path):
 
     for i in range(3):
         for j in range(100):
-
             with open(f'{path}/toronto_{i}/{j}/stats.pkl', "rb") as fr:
                 stats = pickle.load(fr)
                 tot_stats += stats
@@ -450,12 +552,15 @@ if __name__ == '__main__':
     #
     # print("\n***********************************************************************\n")
     #
+
+    s = time.time()
     print('/media/bassel/Career/toronto_content_selection/toronto_dense')
     run_simulation('/media/bassel/Career/toronto_content_selection/toronto_dense')
+    e = time.time()
 
-    # run_simulation('/media/bassel/Career/toronto_content_selection/toronto_dense')
+    print("time taken:", e-s)
+
     # s = time.time()
-    # msg = MessageContentSelection('/media/bassel/Career/toronto_content_selection/toronto/toronto_1/3')
-    # msg.run()
+    # msg = MessageContentSelection('/media/bassel/Career/toronto_content_selection/toronto_dense/toronto_1/3')
     # msg.test_payoff()
     # print("time taken:", time.time()-s)

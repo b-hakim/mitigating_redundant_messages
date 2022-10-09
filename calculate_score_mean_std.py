@@ -136,3 +136,8 @@ if __name__ == '__main__':
     calculate_stats(basedir)
     calculate_vehicles_perceived_more_than_one_AV(basedir)
     # plot_scores_hist(basedir)
+    # for i in range(3):
+    #     path = os.path.join(basedir, "toronto_"+str(i),  'map_scores_distribution.npy')
+    #     all_scores = np.load(path)
+    #
+    #     print(f"map{i}",all_scores)

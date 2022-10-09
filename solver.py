@@ -93,9 +93,10 @@ class Solver:
         return [p.solution_value() for p in probs]
 
     def find_probabilities(self):
+        all_scores = np.array(self.get_all_scores([])).reshape((-1, self.num_players)).tolist()
+
         def equations(probs):
             eqs = []
-            all_scores = np.array(self.get_all_scores([])).reshape((-1, self.num_players)).tolist()
 
             for eq_i in range(self.num_players):
                 eq = 0
@@ -108,10 +109,10 @@ class Solver:
                                 term = term * (-1)
                         else:
                             if b == 0:
-                                try:
-                                    term = term * probs[bit_idx]
-                                except:
-                                    xc = 0
+                                # try:
+                                term = term * probs[bit_idx]
+                                # except:
+                                #     xc = 0
                             else:
                                 term = term * (1 - probs[bit_idx])
                     eq += term
