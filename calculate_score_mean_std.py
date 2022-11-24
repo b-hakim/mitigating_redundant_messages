@@ -25,25 +25,31 @@ def calculate_stats(basedir):
 
         for trial_id, scenario_trial in enumerate(scenario):
             for sender, scores in scenario_trial[4].items():
-                scores = sorted (scores, key=lambda x: x[1], reverse=True)
-                for i, score in enumerate(scores):
-                    if score[1] == 0:
-                        break
+                scores = [s[1] for s in scores]
+                scores = sorted (scores, reverse=True)
+                # for i, score in enumerate(scores):
+                #     if score[1] == 0:
+                #         break
+                #
+                #     all_scores += [s[1] for s in scores if s[1]!=0]
+                #
+                #     if i == len(lst_max_scores):
+                #         lst_max_scores.append([])
+                #
+                #     lst_max_scores[i].append(score[1])
+                lst_max_scores.append(scores[0:2])
 
-                    all_scores += [s[1] for s in scores if s[1]!=0]
+        # for score_lst in lst_max_scores:
+        #     lst_mean_sigma.append([np.mean(score_lst), np.std(score_lst)])
+        lst_max_scores = np.array(lst_max_scores)
 
-                    if i == len(lst_max_scores):
-                        lst_max_scores.append([])
-
-                    lst_max_scores[i].append(score[1])
-
-        lst_mean_sigma=[]
-
-        for score_lst in lst_max_scores:
-            lst_mean_sigma.append([np.mean(score_lst), np.std(score_lst)])
+        lst_mean_sigma={
+            "mean_max_score" : np.mean(lst_max_scores[:, 0]), "std_max_score" : np.std(lst_max_scores[:, 0]), \
+            "mean_2nd_max_score" : np.mean(lst_max_scores[:, 1]), "std_2nd_max_score" : np.std(lst_max_scores[:, 1])
+        }
 
         path = os.path.join(basedir, "toronto_"+str(scenario_id),  'map_scores_distribution.npy')
-        np.save(path, lst_mean_sigma)
+       # np.save(path, lst_mean_sigma)
         print(f"scenario {scenario_id} u,o:", lst_mean_sigma)
 
     all_scores = np.array(all_scores)
